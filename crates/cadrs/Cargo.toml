@@ -23,6 +23,11 @@ cadrs_fs.workspace = true
 # The page's address (`?quick-start`).
 js-sys.workspace = true
 
+# The executable's icon on a Windows host's own (MSVC) build: build.rs. A MinGW build, native
+# or cross-built from Linux (the release), compiles it with windres instead.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"
+
 [features]
 default = ["gpu", "profiler"]
 # The kernel's GPU compute (see cadrs_kernel's `gpu` feature): off unless `CADRS_GPU=1` (it lost
