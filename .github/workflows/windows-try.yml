@@ -1,0 +1,46 @@
+# Throwaway (on the fork only): CI's Windows job alone, on the scrollbar-hit-area branch, with
+# the built cadrs.exe kept as the run's artifact to try by hand.
+name: Windows try
+
+on:
+  push:
+    branches: [windows-ci-try]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The nightly pinned in rust-toolchain.toml (.cargo/config.toml's settings are Linux's).
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc -V
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+
+      - name: Build
+        run: cargo build --locked -p cadrs
+
+      - name: The scrollbar's test
+        run: cargo test --locked -p cadrs_ui --lib scrollbar
+
+      - name: The executable starts
+        shell: bash
+        run: target/debug/cadrs.exe --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadrs-exe
+          path: target/debug/cadrs.exe
+          if-no-files-found: error
