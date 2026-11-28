@@ -71,13 +71,15 @@ impl LegacyWheelGuard {
 }
 
 /// Sends the device's samples to the app, and wakes it: it sleeps while idle (#298), and a
-/// sample would otherwise wait for its next frame.
+/// sample would otherwise wait for its next frame. Unread where there is no backend (macOS).
 #[derive(Clone)]
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 struct SampleSender {
     tx: Sender<MotionSample>,
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 impl SampleSender {
     fn send(&self, sample: MotionSample) -> Result<(), SendError<MotionSample>> {
         self.tx.send(sample)?;

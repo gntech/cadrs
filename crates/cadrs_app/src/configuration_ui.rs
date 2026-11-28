@@ -313,7 +313,8 @@ fn sync_button(
 }
 
 /// A column's heading ("Extrude 1 · Depth", "Part 1 · Part number"): parts named as the Parts
-/// list shows them.
+/// list shows them. For the MCP server's configuration tools, which a page doesn't run.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn target_label(world: &World, el: &Element, target: &ParamTarget) -> String {
     let settings = world
         .get_resource::<ActiveDocument>()

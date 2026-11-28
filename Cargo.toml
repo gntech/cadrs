@@ -157,7 +157,6 @@ cadrs_idf = { path = "crates/cadrs_idf" }
 cadrs_pcb = { path = "crates/cadrs_pcb" }
 cadrs_fea = { path = "crates/cadrs_fea" }
 cadrs_render = { path = "crates/cadrs_render" }
-cadrs_onshape = { path = "crates/cadrs_onshape" }
 cadrs_sheetmetal = { path = "crates/cadrs_sheetmetal" }
 cadrs_mcp = { path = "crates/cadrs_mcp" }
 
