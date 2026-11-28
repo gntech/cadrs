@@ -356,7 +356,9 @@ jobs:
   macos:
     name: Build (macOS)
     runs-on: macos-26
-    timeout-minutes: 120
+    # A cold build every time (the repository's cache space goes to the Linux jobs' caches),
+    # which with cadmpeg comes close to two hours.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
