@@ -63,7 +63,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+            pkg-config libwayland-dev libxkbcommon-dev
 
       - name: Rust toolchain
         run: rustup toolchain install --profile minimal && rustc -V

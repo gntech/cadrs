@@ -6,7 +6,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git build-essential pkg-config \
-      libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+      libwayland-dev libxkbcommon-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ARG TOOLCHAIN
