@@ -17,3 +17,6 @@ doctest = false
 cadrs_kernel = { workspace = true, features = ["cadquery"] }
 nalgebra.workspace = true
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310", "multiple-pymethods"] }
+
+[build-dependencies]
+pyo3-build-config = "0.30"
