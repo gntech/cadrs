@@ -2750,9 +2750,7 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
- "spnav-rs",
  "tar",
- "tokio",
  "ureq",
  "uuid",
  "wasm-bindgen-futures",
@@ -9541,21 +9539,6 @@ checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
 dependencies = [
  "base64ct",
  "der",
-]
-
-[[package]]
-name = "spnav-rs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1960875fb82336a74d865c1afecc2db7a31020b5a8e4a2b3146535e0a77c5b27"
-dependencies = [
- "bitflags 2.13.2",
- "bytes",
- "futures-core",
- "glam 0.30.10",
- "thiserror 2.0.21",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

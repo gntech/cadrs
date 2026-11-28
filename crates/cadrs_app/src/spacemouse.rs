@@ -424,9 +424,23 @@ mod windows_backend {
 
 #[cfg(target_os = "linux")]
 mod linux_backend {
+    //! The spacenavd daemon's protocol (FreeSpacenav, as libspnav speaks it), over its Unix
+    //! socket: frames of eight native-endian `i32`s, the first the event's type. A motion's are
+    //! the six axes and the time since the last one (ms); buttons and the rest are skipped.
+
     use super::*;
-    use spnav_rs::{SpnavClient, SpnavEvent};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
     use std::thread;
+
+    /// A response to a request carries this tag in its first word (events don't).
+    const REQ_TAG: i32 = 0x7faa_0000;
+    /// The request for a protocol version (ORed with the version), sent alone.
+    const CHANGE_PROTO: i32 = 0x5500;
+    /// The protocol asked for: v1 (v0 daemons ignore the request, below).
+    const PROTO: i32 = 1;
+    const MOTION: i32 = 0;
 
     pub(super) fn start(sender: SampleSender) {
         let _ = thread::Builder::new()
@@ -435,59 +449,107 @@ mod linux_backend {
     }
 
     fn run(sender: SampleSender) {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                bevy::log::warn!(%error, "cannot start SpaceMouse event runtime");
-                return;
-            }
-        };
         loop {
-            let mut client = match runtime.block_on(SpnavClient::open()) {
-                Ok(client) => client,
-                Err(_) => {
-                    thread::sleep(Duration::from_secs(2));
-                    continue;
-                }
+            let Some(mut stream) = connect() else {
+                thread::sleep(Duration::from_secs(2));
+                continue;
             };
             bevy::log::info!("Connected to the spacenav daemon");
+            let mut frame = [0u8; 32];
             loop {
-                // `timeout` registers its timer as soon as it is called. Building it as an
-                // argument of `block_on` runs that call before the runtime is entered, and the
-                // thread panics with "there is no reactor running".
-                let event = runtime.block_on(async {
-                    tokio::time::timeout(Duration::from_millis(100), client.wait_event()).await
-                });
-                match event {
-                    Ok(Ok(SpnavEvent::Motion(motion))) => {
-                        let sample = MotionSample {
-                            axes: from_spacenavd([
-                                motion.x, motion.y, motion.z, motion.rx, motion.ry, motion.rz,
-                            ]),
-                            dt: (motion.period as f32 / 1000.0).clamp(0.0, MAX_INPUT_WINDOW),
-                        };
-                        if sender.send(sample).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(Ok(_)) | Err(_) => {}
-                    Ok(Err(error)) => {
-                        bevy::log::debug!(%error, "spacenav connection ended");
-                        break;
-                    }
+                if let Err(error) = stream.read_exact(&mut frame) {
+                    bevy::log::debug!(%error, "spacenav connection ended");
+                    break;
+                }
+                let Some(sample) = motion(&frame) else {
+                    continue;
+                };
+                if sender.send(sample).is_err() {
+                    return;
                 }
             }
             thread::sleep(Duration::from_millis(500));
         }
+    }
+
+    /// The daemon's socket: `SPNAV_SOCKET`, else `socket = …` in `/etc/spnavrc`, else
+    /// spacenavd's default.
+    fn socket() -> PathBuf {
+        if let Some(path) = std::env::var_os("SPNAV_SOCKET") {
+            return path.into();
+        }
+        std::fs::read_to_string("/etc/spnavrc")
+            .ok()
+            .and_then(|rc| {
+                rc.lines().find_map(|line| {
+                    let (key, value) = line.trim_start().split_once('=')?;
+                    let value = value.trim();
+                    (!key.starts_with('#') && key.trim() == "socket" && !value.is_empty())
+                        .then(|| value.into())
+                })
+            })
+            .unwrap_or_else(|| "/var/run/spnav.sock".into())
+    }
+
+    /// Connects and asks for protocol v1, as libspnav does. A v0 daemon doesn't answer (within
+    /// 300 ms) and took the request's four bytes for a sensitivity: those are set back to 1.0.
+    /// Both send motions in the same frames.
+    fn connect() -> Option<UnixStream> {
+        let mut stream = UnixStream::connect(socket()).ok()?;
+        stream
+            .write_all(&(REQ_TAG | CHANGE_PROTO | PROTO).to_ne_bytes())
+            .ok()?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .ok()?;
+        let mut answer = [0u8; 32];
+        let answered = stream.read_exact(&mut answer).is_ok() && word(&answer, 0) & REQ_TAG != 0;
+        if !answered {
+            stream.write_all(&1.0f32.to_ne_bytes()).ok()?;
+        }
+        stream.set_read_timeout(None).ok()?;
+        Some(stream)
+    }
+
+    fn word(frame: &[u8; 32], i: usize) -> i32 {
+        i32::from_ne_bytes(frame[4 * i..4 * i + 4].try_into().unwrap())
+    }
+
+    /// A motion frame's sample; none for any other frame.
+    pub(super) fn motion(frame: &[u8; 32]) -> Option<MotionSample> {
+        if word(frame, 0) != MOTION {
+            return None;
+        }
+        let axes = [1, 2, 3, 4, 5, 6].map(|i| word(frame, i));
+        Some(MotionSample {
+            axes: from_spacenavd(axes),
+            dt: (word(frame, 7) as u32 as f32 / 1000.0).clamp(0.0, MAX_INPUT_WINDOW),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_spacenavd_motion_frame_is_read_as_the_device_reads_it() {
+        // x y z rx ry rz as spacenavd sends them (Y and Z swapped and negated), and 16 ms.
+        let words = [0, 350, 0, -350, 0, 0, 0, 16];
+        let mut frame = [0u8; 32];
+        for (i, w) in words.iter().enumerate() {
+            frame[4 * i..4 * i + 4].copy_from_slice(&i32::to_ne_bytes(*w));
+        }
+        let sample = linux_backend::motion(&frame).unwrap();
+        assert_eq!(sample.axes, from_spacenavd([350, 0, -350, 0, 0, 0]));
+        assert_eq!(sample.axes[0], 1.0);
+        assert_eq!(sample.axes[1], 1.0);
+        assert!((sample.dt - 0.016).abs() < 1e-6);
+        // A button press (type 1) is no motion.
+        frame[..4].copy_from_slice(&1i32.to_ne_bytes());
+        assert!(linux_backend::motion(&frame).is_none());
+    }
 
     #[test]
     fn zero_input_does_not_move_the_camera() {
