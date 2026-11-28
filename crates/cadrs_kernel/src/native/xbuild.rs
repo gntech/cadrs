@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use super::curve::Curve;
 use super::math::*;
-use super::nurbs::{NurbsCurve, NurbsSurface};
+use super::nurbs::{H, NurbsCurve, NurbsSurface};
 use super::pcurve;
 use super::surface::Surface;
 use super::tol;
@@ -1210,7 +1210,7 @@ impl XBuilder {
     /// face's surface and the edge alone, so the same whatever the threads.
     fn fit_pcurves(&mut self, dropped: &[bool]) {
         use rayon::prelude::*;
-        let edges = &self.body.edges;
+        let (edges, verts) = (&self.body.edges, &self.body.verts);
         let one = |(fi, f): (usize, &XFace)| -> Vec<((usize, usize), Curve)> {
             let per = periods(&f.surf);
             let mut seen = std::collections::HashSet::new();
@@ -1220,11 +1220,12 @@ impl XBuilder {
                 .filter(|(e, _)| seen.insert(*e))
                 .map(|&(e, _)| {
                     let ed = &edges[e];
+                    let pc = snap_tiny(pcurve_unsnapped_on(
+                        &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
+                    ));
                     (
                         (fi, e),
-                        snap_tiny(pcurve_unsnapped_on(
-                            &f.surf, &per, &ed.curve, ed.t[0], ed.t[1], ed.tol,
-                        )),
+                        Self::ends_on_vertices(verts, &f.surf, &per, ed, pc),
                     )
                 })
                 .collect()
@@ -1251,7 +1252,49 @@ impl XBuilder {
     /// The p-curve of edge `e` on `s`.
     fn pc_raw(&self, s: &Surface, e: usize) -> Curve {
         let ed = &self.body.edges[e];
-        pcurve_checked_tol(s, &ed.curve, ed.t[0], ed.t[1], ed.tol)
+        let pc = pcurve_checked_tol(s, &ed.curve, ed.t[0], ed.t[1], ed.tol);
+        Self::ends_on_vertices(&self.body.verts, s, &periods(s), ed, pc)
+    }
+
+    /// A fitted p-curve with each end moved to its vertex, where the file's curve ends off the
+    /// vertex: the p-curves of a loop then meet in (u, v) at the vertices they share, as they
+    /// meet in space. (Where a surface's parameters run slowly, a gap of 0.02 mm at an end can be
+    /// 0.2 in v.) A move further than a quarter of the edge's chord is left out.
+    fn ends_on_vertices(
+        verts: &[Vertex],
+        s: &Surface,
+        per: &Periods,
+        ed: &Edge,
+        pc: Curve,
+    ) -> Curve {
+        let Curve::Nurbs(n) = &pc else {
+            return pc;
+        };
+        if ed.degenerate || !n.is_clamped() {
+            return pc;
+        }
+        let chord = (ed.curve.point(ed.t[1]) - ed.curve.point(ed.t[0])).norm();
+        let mut m = (**n).clone();
+        let last = m.cps.len() - 1;
+        let mut moved = false;
+        for (k, i) in [(0, 0), (1, last)] {
+            let Some(vx) = verts.get(ed.v[k]) else {
+                continue;
+            };
+            let d = (ed.curve.point(ed.t[k]) - vx.p).norm();
+            if d <= tol::POINT || d > chord / 4.0 {
+                continue;
+            }
+            let q = pc.point(ed.t[k]);
+            let (u, v) = project(s, per, &vx.p, Some((q.x, q.y)), d.max(5e-4));
+            if (s.eval(u, v) - vx.p).norm() > d {
+                continue;
+            }
+            let w = m.cps[i][3];
+            m.cps[i] = H::new(u * w, v * w, 0.0, w);
+            moved = true;
+        }
+        if moved { Curve::Nurbs(Arc::new(m)) } else { pc }
     }
 
     /// Whether moving along u at `uv` leaves the surface point in place (a pole or an apex):
@@ -2970,6 +3013,43 @@ mod tests {
         assert!(j.validate().is_ok());
         assert!((j.point(2.0) - cubic.point(2.0)).norm() < 1e-9);
         assert!((j.point(5.0) - P3::new(5.0, (4f64.sin()) / 2.0, 0.0)).norm() < 1e-9);
+    }
+
+    /// A file's curve ending off its vertex, within the vertex's tolerance: the fitted p-curve
+    /// still ends at the vertex, so a loop's p-curves meet in (u, v) where its edges meet in
+    /// space. Here 1 unit of v is 100 mm, so the curve's 0.02 mm gap would be 2e-4 in v
+    /// (NIST's nist_ctc_05_asme1_rd.stp: 0.018 mm, 0.18 in v of a B-spline face).
+    #[test]
+    fn a_fitted_pcurve_ends_at_its_vertex_not_at_its_curves_end() {
+        // The plane z = 0 as a bilinear B-spline: x = 10 u, y = 100 v.
+        let h = |x: f64, y: f64| super::super::nurbs::hom(&P3::new(x, y, 0.0), 1.0);
+        let s = Surface::Nurbs(Arc::new(NurbsSurface {
+            du: 1,
+            dv: 1,
+            ku: vec![0.0, 0.0, 1.0, 1.0],
+            kv: vec![0.0, 0.0, 1.0, 1.0],
+            cps: vec![
+                vec![h(0.0, 0.0), h(0.0, 100.0)],
+                vec![h(10.0, 0.0), h(10.0, 100.0)],
+            ],
+            screw: None,
+        }));
+        let (p0, p1) = (P3::new(2.0, 20.0, 0.0), P3::new(8.0, 60.0, 0.0));
+        let mut xb = XBuilder::new();
+        let (a, b) = (xb.vertex(p0), xb.vertex(p1));
+        // The curve runs past p1 and 0.02 mm to its side: its end is off the vertex.
+        let off = P3::new(8.0 + 0.02, 60.0, 0.0);
+        let (c, _) = Curve::line(p0, off);
+        let e = xb.edge(c, a, b).expect("the edge");
+        let ed = xb.body.edges[e].clone();
+        assert!((ed.point(ed.t[1]) - p1).norm() > 0.01);
+        let pc = xb.pc_raw(&s, e);
+        let at = |t: f64| {
+            let q = pc.point(t);
+            s.eval(q.x, q.y)
+        };
+        assert!((at(ed.t[0]) - p0).norm() < 1e-9);
+        assert!((at(ed.t[1]) - p1).norm() < 1e-9, "{:?}", at(ed.t[1]));
     }
 
     /// An edge along a closed spline ending at the spline's start (its vertex projects to the
