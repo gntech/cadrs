@@ -154,9 +154,11 @@ jobs:
 
       # Unit tests only: each integration test (`crates/*/tests`) links Bevy and OpenCASCADE into
       # its own large binary, too much for a hosted runner's disk. Run them locally with
-      # `cargo test --workspace`.
+      # `cargo test --workspace`. Not cadrs_py, a Python extension with no Rust tests: built with
+      # pyo3's extension-module it doesn't link libpython, so its test binary can't link (and
+      # `--lib` would test it despite its `test = false`).
       - name: Test
-        run: cargo test --workspace --exclude cadrs --lib
+        run: cargo test --workspace --exclude cadrs --exclude cadrs_py --lib
 
   # Per push and pull request: every app scenario (scenarios/*.ron) run headless with no GPU
   # (`cadrs --headless --no-gpu`: nothing is drawn, the UI, input and the document run as usual),
@@ -225,7 +227,9 @@ jobs:
 
       - name: The suite, on this kernel
         working-directory: tools/conformance
+        # pipefail: a failed build fails this step, not the next one's missing conformance.json.
         run: |
+          set -o pipefail
           cargo run --release --locked --example suite -- \
             --out "$GITHUB_WORKSPACE/conformance.json" | tee "$GITHUB_WORKSPACE/conformance.txt"
 

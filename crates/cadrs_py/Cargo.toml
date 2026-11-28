@@ -9,6 +9,9 @@ publish = false
 [lib]
 name = "_cadrs"
 crate-type = ["cdylib", "rlib"]
+# No Rust tests, and with pyo3's extension-module a test binary has no libpython to link.
+test = false
+doctest = false
 
 [dependencies]
 cadrs_kernel = { workspace = true, features = ["cadquery"] }
