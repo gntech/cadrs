@@ -301,7 +301,11 @@ jobs:
         with:
           key: release-web
 
+      # rustc's default LTO, as the site's build (pages.yml): with fat LTO the two WebAssembly
+      # builds starved the runner of memory even with swap, and it was lost (v0.2.10).
       - name: Build
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
         run: tools/web/build.sh target/web
 
       - name: Package
